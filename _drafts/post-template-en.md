@@ -9,7 +9,10 @@ translation_id: article-slug
 toc: true
 ---
 
-[Leggi in italiano](/it/posts/slug-articolo/)
+<nav class="language-switcher" aria-label="Article language">
+  <a href="/it/posts/slug-articolo/" hreflang="it">IT</a>
+  <span class="is-current" aria-current="page">EN</span>
+</nav>
 
 ## Introduction
 
