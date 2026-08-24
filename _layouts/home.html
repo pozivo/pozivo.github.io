@@ -1,0 +1,58 @@
+---
+layout: default
+---
+
+{% include lang.html %}
+{% include home-hero.html %}
+
+<section class="editorial-section latest-section" aria-labelledby="latest-posts-title">
+  <div class="section-heading">
+    <div>
+      <span class="section-kicker">Field notes</span>
+      <h2 id="latest-posts-title">Ultimi articoli</h2>
+    </div>
+    <a href="{{ '/archives/' | relative_url }}">Archivio →</a>
+  </div>
+
+  {% assign visible_posts = paginator.posts | default: site.posts %}
+  <div id="post-list" class="editorial-post-list">
+    {% for post in visible_posts %}
+      {% unless post.hidden %}
+        <article class="editorial-post-card">
+          <a href="{{ post.url | relative_url }}" class="editorial-post-link">
+            <div class="editorial-post-topline">
+              <span class="post-language">{{ post.lang | default: site.lang | replace: 'it-IT', 'IT' | upcase }}</span>
+              {% if post.categories.size > 0 %}
+                <span class="post-category">{{ post.categories | first }}</span>
+              {% endif %}
+            </div>
+
+            <h3>{{ post.title }}</h3>
+
+            <p>{% include post-summary.html %}</p>
+
+            <div class="editorial-post-footer">
+              <span>
+                <i class="far fa-calendar fa-fw" aria-hidden="true"></i>
+                {% include datetime.html date=post.date lang=lang %}
+              </span>
+              <span class="read-more">Leggi →</span>
+            </div>
+          </a>
+        </article>
+      {% endunless %}
+    {% endfor %}
+  </div>
+
+  {% if site.posts.size == 0 %}
+    <div class="empty-state">
+      <span class="empty-state-code">STATUS 204</span>
+      <h3>Il laboratorio editoriale è pronto.</h3>
+      <p>I primi articoli appariranno qui quando verranno spostati da <code>_drafts</code> a <code>_posts</code>.</p>
+    </div>
+  {% endif %}
+</section>
+
+{% if paginator.total_pages > 1 %}
+  {% include post-paginator.html %}
+{% endif %}
